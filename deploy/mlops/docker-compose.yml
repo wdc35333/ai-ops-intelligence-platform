@@ -1,0 +1,41 @@
+# MLOps stack (L3). Run:  docker compose -f deploy/mlops/docker-compose.yml up
+#
+# Alongside the read-only ml-anomaly service it brings up:
+#   - mlflow  : tracking server + model registry UI   → http://localhost:5000
+#   - airflow : scheduler + webserver (standalone)     → http://localhost:8080
+#
+# Architecture:  airflow ──HTTP──▶ ml-anomaly /pipeline/run ──log──▶ mlflow
+services:
+  mlflow:
+    image: python:3.12-slim
+    command: >
+      bash -lc "pip install --no-cache-dir 'mlflow>=2.14,<3' &&
+                mlflow server --host 0.0.0.0 --port 5000
+                --backend-store-uri sqlite:////mlflow/mlflow.db
+                --artifacts-destination /mlflow/artifacts"
+    ports: ["5000:5000"]
+    volumes: ["mlflow_data:/mlflow"]
+
+  ml-anomaly:
+    build: ../../services/ml-anomaly
+    environment:
+      MLA_DATA_SOURCE: ${MLA_DATA_SOURCE:-synthetic}
+      MLA_DATABASE_URL: ${MLA_DATABASE_URL:-}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLA_MLFLOW_EXPERIMENT: kiosk-anomaly
+    ports: ["8200:8200"]
+    depends_on: [mlflow]
+
+  airflow:
+    image: apache/airflow:2.10.3
+    command: standalone
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      ML_ANOMALY_URL: http://ml-anomaly:8200
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    ports: ["8080:8080"]
+    depends_on: [ml-anomaly]
+
+volumes:
+  mlflow_data:

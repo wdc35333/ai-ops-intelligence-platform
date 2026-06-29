@@ -1,0 +1,12 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+pandas>=2.2,<3
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+SQLAlchemy>=2.0,<3
+PyMySQL>=1.1,<2
+# skinny avoids heavy deps (pyarrow/scipy); tracking + model + registry core only.
+# The compose stack runs the full mlflow server for the registry-backed UI.
+mlflow-skinny>=2.14,<3
