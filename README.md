@@ -10,7 +10,7 @@ and reports what's wrong — in Korean, on a schedule, for free. It pairs an **L
 (observe → reason → act) with **ML anomaly/drift detection** and a real **MLOps** loop,
 and it runs its "brain" on a Mac mini's GPU over a tunnel so production pays no token cost.
 
-Built as a portfolio for **AI-systems / Data-AI roles** (e.g. SK hynix DT · Data 분석·개발).
+Built as a portfolio for **AI-systems / Data-AI roles** .
 Everything here is verified locally; nothing requires the production database or an API key
 to run (a synthetic data source and a mock brain make the whole thing demoable offline).
 
