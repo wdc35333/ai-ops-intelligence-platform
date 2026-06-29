@@ -16,12 +16,17 @@ def test_isolation_forest_flags_injected_host_anomalies():
     assert set(injected).issubset(flagged), (injected, sorted(flagged))
 
 
-def test_isolation_forest_quiet_on_clean_data_has_low_rate():
+def test_isolation_forest_gate_silences_normal_extremes():
+    # The fixed contamination labels ~2% of EVERY window; the robust-z magnitude
+    # gate must drop those normal-but-extreme points so a clean window is (near)
+    # silent. The ungated run (z_thresh=0) reproduces the old chatty behaviour.
     raw, _ = make_synthetic_system_metrics(window_hours=72, seed=1)
     feats = add_system_metric_features(raw)
-    out = detect_isolation_forest(feats, SYSTEM_FEATURES, contamination=0.02)
-    # contamination=2% → flagged fraction should stay small
-    assert out["is_anomaly"].mean() <= 0.05
+    gated = detect_isolation_forest(feats, SYSTEM_FEATURES, z_thresh=3.5)
+    ungated = detect_isolation_forest(feats, SYSTEM_FEATURES, z_thresh=0.0)
+    assert ungated["is_anomaly"].sum() >= 8  # ~2% of ~864 points
+    assert gated["is_anomaly"].sum() < ungated["is_anomaly"].sum()
+    assert gated["is_anomaly"].mean() <= 0.01  # clean window stays quiet
 
 
 def test_seasonal_zscore_flags_revenue_spike():

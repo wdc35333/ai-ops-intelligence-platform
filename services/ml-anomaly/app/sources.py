@@ -155,11 +155,21 @@ _SYSTEM_METRICS_SQL = """
      ORDER BY collected_at
 """
 
+# Real kiosk revenue (success payments) — the "A" component of the canonical
+# A+B−C revenue model (see features/delivery/queries/revenueComponents.ts). A is
+# ~99% of revenue (B/C are a few hundred rows all-time), a close-enough proxy for
+# anomaly/drift detection. NOT online_booking, which is the sparse new online-
+# prepayment channel. use_log_create_date is an epoch (seconds), so we filter on
+# UNIX_TIMESTAMP and project it back to a datetime to keep the column contract.
 _BOOKINGS_SQL = """
-    SELECT created_at, amount, status, refunded_at
-      FROM online_booking
-     WHERE created_at >= %(since)s
-     ORDER BY created_at
+    SELECT FROM_UNIXTIME(use_log_create_date) AS created_at,
+           amount,
+           'paid' AS status,
+           NULL   AS refunded_at
+      FROM use_log_payment
+     WHERE payment_status = 1 AND amount > 0
+       AND use_log_create_date >= UNIX_TIMESTAMP(%(since)s)
+     ORDER BY use_log_create_date
 """
 
 

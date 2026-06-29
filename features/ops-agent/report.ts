@@ -32,9 +32,14 @@ export async function persistReport(
 ): Promise<void> {
   try {
     const { prisma } = await import('@/lib/prisma');
+    // run_at 은 UTC 로 저장한다. mariadb 드라이버가 DATETIME 을 Node 프로세스
+    // 로컬(컨테이너=UTC) 기준으로 읽고, 대시보드(/api/ops-agent/reports)가
+    // toISOString()→브라우저 toLocaleString(KST) 로 변환하므로, DB 로컬시각(KST)인
+    // NOW(3) 로 저장하면 KST 값이 UTC 로 오해돼 화면에 +9h 가 더해진다. UTC_TIMESTAMP
+    // 로 저장하면 "UTC 저장 → KST 표시" 가 일관되게 맞는다.
     await prisma.$executeRaw`
       INSERT INTO ops_agent_report (run_at, severity, headline, body_json, brain, tool_calls)
-      VALUES (NOW(3), ${report.severity}, ${report.headline},
+      VALUES (UTC_TIMESTAMP(3), ${report.severity}, ${report.headline},
               ${JSON.stringify(report)}, ${meta.brain}, ${meta.toolCalls.join(',')})`;
   } catch (e) {
     console.warn('[ops-agent] persist 건너뜀:', e instanceof Error ? e.message : String(e));
@@ -42,8 +47,9 @@ export async function persistReport(
 }
 
 /**
- * severity ≥ warning 이면 알림. dry-run(기본)에서는 발송하지 않고 로그만.
- * 실제 푸시는 lib/push-events.ts 에 ops_agent_alert 이벤트 추가 후 연결(후속 작업).
+ * severity ≥ warning 이면 알림. dry-run(기본, OPS_AGENT_DRY_RUN≠0)에서는 발송하지 않고 로그만.
+ * 실발송은 기존 ops 알림 인프라(lib/ops-alert)를 재사용 — throttle(ops_alert_log) +
+ * notification_config 라우팅(기본 개발팀, /notification-settings 에서 변경·끄기 가능)을 그대로 따른다.
  */
 export async function dispatchAlert(report: OpsReport, dryRun: boolean): Promise<void> {
   if (report.severity === 'info') return;
@@ -51,5 +57,16 @@ export async function dispatchAlert(report: OpsReport, dryRun: boolean): Promise
     console.log(`[ops-agent] (dry-run) 알림 보류: ${report.severity} — ${report.headline}`);
     return;
   }
-  console.log('[ops-agent] 실발송 미연결(ops_agent_alert 이벤트 추가 필요).');
+  const { maybeSendOpsAlert } = await import('@/lib/ops-alert');
+  // critical 은 자주 재알림(3h), warning 은 하루 1회 수준(12h)으로 throttle — 중복 발송 방지.
+  const critical = report.severity === 'critical';
+  const sent = await maybeSendOpsAlert({
+    alertKey: critical ? 'ops_agent_critical' : 'ops_agent_warning',
+    throttleMin: critical ? 180 : 720,
+    event: 'ops_agent_alert',
+    data: { severity: report.severity, summary: report.headline },
+  });
+  console.log(
+    `[ops-agent] 알림 ${sent ? '발송' : '보류(throttle/실패)'}: ${report.severity} — ${report.headline}`,
+  );
 }

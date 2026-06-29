@@ -67,4 +67,9 @@ class DriftResponse(BaseModel):
     window_hours: int
     overall: DriftSeverity
     drifted: bool
+    # False until a stable baseline (>= drift_min_baseline_hours) has accrued;
+    # while False, severities stay 'ok' (the agent should report "building
+    # baseline", not drift).
+    sufficient_history: bool = True
+    baseline_hours: float = 0.0
     features: dict[str, DriftFeature]

@@ -33,7 +33,7 @@ from .schemas import (
 )
 from .sources import DataSource, get_source
 
-app = FastAPI(title="kiosk ML anomaly service", version=__version__)
+app = FastAPI(title="DKNT kiosk ML anomaly service", version=__version__)
 
 
 def _now() -> datetime:
@@ -46,7 +46,12 @@ def _now() -> datetime:
 def _run_system(source: DataSource, settings: Settings, window_hours: int) -> pd.DataFrame:
     raw = source.system_metrics(window_hours)
     feats = add_system_metric_features(raw)
-    return detect_isolation_forest(feats, SYSTEM_FEATURES, contamination=settings.if_contamination)
+    return detect_isolation_forest(
+        feats,
+        SYSTEM_FEATURES,
+        contamination=settings.if_contamination,
+        z_thresh=settings.if_min_robust_z,
+    )
 
 
 def _run_bookings(source: DataSource, settings: Settings, window_hours: int) -> pd.DataFrame:
@@ -62,6 +67,57 @@ def _run_bookings(source: DataSource, settings: Settings, window_hours: int) -> 
 def _system_value(row: pd.Series) -> float:
     metric = (row["reason"] or "load1").split()[0]
     return float(row.get(metric, row["load1"]))
+
+
+# Operational levels for surfacing host-metric anomalies to the agent. Statistical
+# isolation alone is too chatty — IsolationForest labels ~2% of EVERY window, and
+# a feature's normal seasonal peaks can reach robust-z 20+ — so a resource is only
+# worth the agent's attention when it genuinely nears its limit. (IsolationForest
+# still powers /detect/* and the MLflow recall metric.) Load is omitted: with no
+# core-count column it can't be normalised; the agent reads it via
+# get_system_metrics instead.
+_DISK_WARN, _DISK_CRIT = 0.80, 0.90
+_MEM_WARN, _MEM_CRIT = 0.85, 0.95
+
+
+def _level_severity(value: float, warn: float, crit: float) -> str | None:
+    if value >= crit:
+        return "critical"
+    if value >= warn:
+        return "warning"
+    return None
+
+
+def _system_feed_items(sys_df: pd.DataFrame) -> list[FeedItem]:
+    """At most one item per resource (disk, mem) — the window's worst sample —
+    surfaced only when operationally significant. Keeps healthy days silent."""
+    out: list[FeedItem] = []
+    if sys_df.empty:
+        return out
+    for col, label, warn, crit in (
+        ("disk_used_pct", "디스크", _DISK_WARN, _DISK_CRIT),
+        ("mem_used_pct", "메모리", _MEM_WARN, _MEM_CRIT),
+    ):
+        if col not in sys_df:
+            continue
+        idx = sys_df[col].idxmax()
+        peak = float(sys_df.loc[idx, col])
+        sev = _level_severity(peak, warn, crit)
+        if sev is None:
+            continue
+        row = sys_df.loc[idx]
+        out.append(
+            FeedItem(
+                timestamp=row["collected_at"].to_pydatetime(),
+                domain="system",
+                severity=sev,
+                metric=col,
+                value=round(peak, 4),
+                score=float(row.get("score", 0.0) or 0.0),
+                summary=f"[시스템] {label} 사용률 {peak:.0%}",
+            )
+        )
+    return out
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────
@@ -139,24 +195,7 @@ def anomalies(window_hours: int = Query(default=None, ge=24, le=2160)) -> Anomal
     items: list[FeedItem] = []
 
     sys_df = _run_system(source, settings, window)
-    for _, row in sys_df[sys_df["is_anomaly"]].iterrows():
-        metric = (row["reason"] or "load1").split()[0]
-        severity = (
-            "critical"
-            if (row["disk_used_pct"] >= 0.9 or row["mem_used_pct"] >= 0.95)
-            else "warning"
-        )
-        items.append(
-            FeedItem(
-                timestamp=row["collected_at"].to_pydatetime(),
-                domain="system",
-                severity=severity,
-                metric=metric,
-                value=round(_system_value(row), 4),
-                score=float(row["score"]),
-                summary=f"[시스템] {row['reason']}",
-            )
-        )
+    items.extend(_system_feed_items(sys_df))
 
     bk_df = _run_bookings(source, settings, window)
     if not bk_df.empty:
@@ -211,5 +250,7 @@ def drift(window_hours: int = Query(default=None, ge=12, le=2160)) -> DriftRespo
         window_hours=d["window_hours"],
         overall=d["overall"],
         drifted=d["drifted"],
+        sufficient_history=d["sufficient_history"],
+        baseline_hours=d["baseline_hours"],
         features={k: DriftFeature(**v) for k, v in d["features"].items()},
     )

@@ -35,6 +35,7 @@ def detect_isolation_forest(
     feature_cols: list[str],
     contamination: float = 0.02,
     random_state: int = 42,
+    z_thresh: float = 3.5,
 ) -> pd.DataFrame:
     out = df.copy().reset_index(drop=True)
     if len(out) < 12:
@@ -48,15 +49,23 @@ def detect_isolation_forest(
     model.fit(X)
     # decision_function: higher = more normal → negate so higher = more anomalous.
     out["score"] = (-model.decision_function(X)).round(4)
-    out["is_anomaly"] = model.predict(X) == -1
+    iso_flag = model.predict(X) == -1
 
     _, z = _robust_z(X)
     top = z.argmax(axis=1)
+    zmax = z[np.arange(len(out)), top]
+    # Gate the IsolationForest's relative top-contamination% with an ABSOLUTE
+    # magnitude check: a point counts only if it is both isolated AND genuinely
+    # far from normal (robust-z >= z_thresh on its dominant feature). Without the
+    # gate, a fixed contamination labels ~2% of EVERY window — even perfectly
+    # normal data — so the ops report flagged ~10 'warnings' every single run.
+    out["is_anomaly"] = iso_flag & (zmax >= z_thresh)
+
     reasons: list[str | None] = []
     for r in range(len(out)):
         if out["is_anomaly"].iloc[r]:
             col = feature_cols[top[r]]
-            reasons.append(f"{col} 이상 (robust-z={z[r, top[r]]:.1f})")
+            reasons.append(f"{col} 이상 (robust-z={zmax[r]:.1f})")
         else:
             reasons.append(None)
     out["reason"] = reasons

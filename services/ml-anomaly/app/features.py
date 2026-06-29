@@ -24,7 +24,7 @@ def add_system_metric_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def aggregate_bookings_hourly(df: pd.DataFrame) -> pd.DataFrame:
-    """Collapse raw ``online_booking`` rows into an hourly revenue series.
+    """Collapse raw payment rows into an hourly revenue series.
 
     Returns one row per hour with gross booking ``revenue`` (KRW), booking
     ``count`` and ``refund_count``. Empty hours inside the window are filled
